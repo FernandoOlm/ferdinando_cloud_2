@@ -528,7 +528,7 @@ async function processarMensagem(msg, sock, upsertType) {
   }
 
   const jid = msg.key.remoteJid;
-  const isGroup = jid?.endsWith("@g.us");
+  const isGroup = jid?.endsWith("@g.us") || jid?.endsWith("@newsletter");
 
   // ARMAZENAR TODAS AS MENSAGENS NO STORE (para decryption de votos)
   storeMessage(msg);
@@ -604,31 +604,36 @@ async function processarMensagem(msg, sock, upsertType) {
 
   let groupName = "";
   if (isGroup) {
-    try {
-      const meta = await sock.groupMetadata(jid);
-      groupName = meta.subject;
-      await atualizarGrupo_Unique03(sock, jid);
-      
-      // Mapear LID <-> PN do remetente da mensagem
-      const sender = meta.participants.find(p => {
-        const pId = p.id?.replace(/@.*/, "");
-        const pLid = p.lid?.replace(/@.*/, "");
-        const pJid = p.jid?.replace(/@.*/, "");
-        return pId === fromClean || pLid === fromClean || pJid === fromClean;
-      });
-      if (sender) {
-        const sLid = sender.lid ? sender.lid.replace(/@.*/, "") : null;
-        const sJid = sender.jid ? sender.jid.replace(/@.*/, "") : null;
-        const sId = sender.id ? sender.id.replace(/@.*/, "") : null;
-        if (sLid && sJid) {
-          atualizarMapeamento(sLid, sJid);
-        } else if (sLid && sId && sLid !== sId) {
-          atualizarMapeamento(sLid, sId);
-        } else if (sJid && sId && sJid !== sId) {
-          atualizarMapeamento(sId, sJid);
+    const isNewsletter = jid?.endsWith("@newsletter");
+    if (isNewsletter) {
+      groupName = "Canal";
+    } else {
+      try {
+        const meta = await sock.groupMetadata(jid);
+        groupName = meta.subject;
+        await atualizarGrupo_Unique03(sock, jid);
+        
+        // Mapear LID <-> PN do remetente da mensagem
+        const sender = meta.participants.find(p => {
+          const pId = p.id?.replace(/@.*/, "");
+          const pLid = p.lid?.replace(/@.*/, "");
+          const pJid = p.jid?.replace(/@.*/, "");
+          return pId === fromClean || pLid === fromClean || pJid === fromClean;
+        });
+        if (sender) {
+          const sLid = sender.lid ? sender.lid.replace(/@.*/, "") : null;
+          const sJid = sender.jid ? sender.jid.replace(/@.*/, "") : null;
+          const sId = sender.id ? sender.id.replace(/@.*/, "") : null;
+          if (sLid && sJid) {
+            atualizarMapeamento(sLid, sJid);
+          } else if (sLid && sId && sLid !== sId) {
+            atualizarMapeamento(sLid, sId);
+          } else if (sJid && sId && sJid !== sId) {
+            atualizarMapeamento(sId, sJid);
+          }
         }
-      }
-    } catch { groupName = "Grupo"; }
+      } catch { groupName = "Grupo"; }
+    }
   }
 
   // Log de console otimizado
@@ -638,7 +643,7 @@ async function processarMensagem(msg, sock, upsertType) {
   botLoggerRegisterEvent_Unique01(msg);
 
   // Verificador automático de anúncios (links, imagens, cards)
-  if (isGroup) {
+  if (isGroup && !jid?.endsWith("@newsletter")) {
     try {
       const bloqueio = await verificarAnuncioAuto(msg, sock, fromClean);
       if (bloqueio) {
@@ -666,12 +671,15 @@ async function processarMensagem(msg, sock, upsertType) {
       const cfg = comandosJSON[cmd];
 
       if (cfg) {
-        const meta = isGroup ? await sock.groupMetadata(jid) : null;
-        const isAdmin = isGroup ? meta.participants.some(p => p.id.replace(/@.*/, "") === fromClean && (p.admin === "admin" || p.admin === "superadmin")) : false;
+        const isNewsletter = jid?.endsWith("@newsletter");
+        const meta = (isGroup && !isNewsletter) ? await sock.groupMetadata(jid) : null;
+        const isAdmin = meta ? meta.participants.some(p => p.id.replace(/@.*/, "") === fromClean && (p.admin === "admin" || p.admin === "superadmin")) : false;
         
         // Verificação de ROOT (Fernando) — Hardcoded + Mapeamento + ENV
         const isRoot = idsMatch(fromClean, ROOT) || ["65060886032554", "554792671477"].includes(fromClean);
 
+        // Em canais (newsletters), não há lista de participantes acessível via groupMetadata da mesma forma que grupos
+        // Portanto, confiamos no isRoot para comandos admin em canais
         if (cfg.admin && !isAdmin && !isRoot) {
           await sock.sendMessage(jid, { text: "Sem permissão." });
           return;
